@@ -1,95 +1,96 @@
-from sympy import symbols, Or, And, Not, simplify_logic
-from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication_application
+from sympy.parsing.sympy_parser import parse_expr
+from flask import Flask, request, jsonify
+from sympy.logic.boolalg import Or, And, Not
+from sympy import symbols, simplify_logic
+import re
 
-# Definir las variables lógicas
-A, B, C = symbols('A B C')
+app = Flask(__name__)
 
-def convertir_a_sympy(expresion):
+def simplificar(expresion, form='dnf'):
+    """
+    Esta función simplifica la expresión lógica usando simplify_logic de SymPy y la fuerza a la forma dada.
+    """
+    return simplify_logic(expresion, form=form)
+
+def convertir_a_sympy(expresion_str, variables):
     """
     Convierte la cadena de texto con la expresión lógica en una expresión simbólica de SymPy.
     """
-    # Reemplazar los operadores lógicos por los equivalentes en SymPy
-    expresion = expresion.replace("and", "&").replace("or", "|").replace("not", "~")
-    
-    # Intentamos convertir la cadena a una expresión de SymPy
+    # Reemplazar los símbolos lógicos estándar por los símbolos que SymPy entiende
+    simbolos = {
+        "∧": "&",   # AND
+        "∨": "|",   # OR
+        "¬": "~",   # NOT
+        "→": ">>",  # Implica
+        "↔": "==",  # Equivalente
+        "⊕": "^"    # XOR (Disyunción Excluyente)
+    }
+    for simbolo, reemplazo in simbolos.items():
+        expresion_str = expresion_str.replace(simbolo, reemplazo)
+
+    # Definir el contexto para parse_expr dinámicamente con las variables
+    contexto = {var: variables[var] for var in variables}
+
     try:
-        return parse_expr(expresion, transformations=standard_transformations + (implicit_multiplication_application,))
+        # Convertir la cadena a una expresión simbólica de SymPy
+        return parse_expr(expresion_str, local_dict=contexto)
     except Exception as e:
         print(f"Error al convertir la expresión: {e}")
         return None
 
-def ley_absorcion(expresion):
+def revertir_simbolos(expresion_str):
     """
-    Verifica si la ley de absorción A | (A & B) = A se aplica.
+    Convierte los operadores de SymPy a los símbolos originales ingresados por el usuario.
     """
-    if isinstance(expresion, Or) and len(expresion.args) == 2:
-        # Verifica si la forma es A | (A & B)
-        if isinstance(expresion.args[1], And) and expresion.args[0] == expresion.args[1].args[0]:
-            return True
-    return False
+    simbolos_revertidos = {
+        "&": "∧",   # AND
+        "|": "∨",   # OR
+        "~": "¬",   # NOT
+        ">>": "→",  # Implica
+        "==": "↔",  # Equivalente
+        "^": "⊕"    # XOR (Disyunción Excluyente)
+    }
+    for simbolo, reemplazo in simbolos_revertidos.items():
+        expresion_str = expresion_str.replace(simbolo, reemplazo)
+    return expresion_str
 
-def ley_idempotencia(expresion):
+def extraer_variables(expresion_str):
     """
-    Verifica si la ley de idempotencia A | A = A o A & A = A se aplica.
+    Extrae las variables de la expresión lógica en formato de texto.
     """
-    if isinstance(expresion, Or) and len(expresion.args) == 2 and expresion.args[0] == expresion.args[1]:
-        return True
-    if isinstance(expresion, And) and len(expresion.args) == 2 and expresion.args[0] == expresion.args[1]:
-        return True
-    return False
+    return sorted(set(re.findall(r'[A-Za-z]+', expresion_str)))
 
-def ley_exclusion(expresion):
-    """
-    Verifica si la ley de exclusión A | ~A = True o A & ~A = False se aplica.
-    """
-    if isinstance(expresion, Or):
-        for arg in expresion.args:
-            if isinstance(arg, Not) and arg.args[0] == expresion.args[0]:
-                return True
-    if isinstance(expresion, And):
-        for arg in expresion.args:
-            if isinstance(arg, Not) and arg.args[0] == expresion.args[0]:
-                return True
-    return False
-
-def detectar_leyes(expresion):
-    """
-    Detecta las leyes lógicas que pueden aplicarse a la expresión lógica de manera recursiva.
-    """
-    leyes_detectadas = []
-
-    # Verificar las leyes en la expresión actual
-    if ley_absorcion(expresion):
-        leyes_detectadas.append("Ley de absorción: A | (A & B) = A")
+@app.route('/simplificar', methods=['POST'])
+def simplificar_expresion():
+    # Obtener la expresión lógica desde el cuerpo de la solicitud
+    data = request.get_json()
+    if not data or 'expresion' not in data:
+        return jsonify({"error": "Debe proporcionar una expresión lógica"}), 400
     
-    if ley_idempotencia(expresion):
-        leyes_detectadas.append("Ley de idempotencia: A | A = A o A & A = A")
+    expresion_str = data['expresion']
     
-    if ley_exclusion(expresion):
-        leyes_detectadas.append("Ley de exclusión: A | ~A = True o A & ~A = False")
-    
-    # Recorrer recursivamente los argumentos (sub-expresiones)
-    if hasattr(expresion, 'args'):
-        for subexpresion in expresion.args:
-            leyes_detectadas.extend(detectar_leyes(subexpresion))
+    # Extraer las variables de la expresión
+    nombres_variables = extraer_variables(expresion_str)
+    variables = {nombre: symbols(nombre) for nombre in nombres_variables}
 
-    return leyes_detectadas
+    # Convertir la cadena de texto a una expresión simbólica
+    try:
+        expresion = convertir_a_sympy(expresion_str, variables)
+        if not expresion:
+            return jsonify({"error": "Error al convertir la expresión lógica"}), 400
 
-# Entrada del usuario
-entrada_usuario = input("Introduce una expresión lógica utilizando A, B, C y los operadores 'not', 'and', 'or' (por ejemplo: (A and B) or (A and not B)): ")
+        # Simplificar la expresión
+        expresion_simplificada = simplificar(expresion, form='dnf')
 
-# Convertir la cadena de texto a una expresión simbólica
-expresion = convertir_a_sympy(entrada_usuario)
+        # Convertir las expresiones de vuelta a los símbolos originales
+        expresion_simplificada_revertida = revertir_simbolos(str(expresion_simplificada))
 
-# Si la expresión es válida, simplificamos y detectamos las leyes
-if expresion:
-    # Detectar las leyes que se pueden aplicar
-    leyes_aplicadas = detectar_leyes(expresion)
+        return jsonify({
+            'expresion_original': str(expresion_str),
+            'expresion_simplificada': str(expresion_simplificada_revertida)
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    # Mostrar los resultados
-    if leyes_aplicadas:
-        print("Leyes detectadas que pueden aplicarse:")
-        for ley in leyes_aplicadas:
-            print(f"- {ley}")
-    else:
-        print("No se detectaron leyes que puedan aplicarse.")
+if __name__ == '__main__':
+    app.run(debug=True)
