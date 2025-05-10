@@ -60,15 +60,24 @@ def extraer_variables(expresion_str):
     """
     return sorted(set(re.findall(r'[A-Za-z]+', expresion_str)))
 
+def normalizar_parentesis(expresion_str):
+    """
+    Reemplaza corchetes y llaves por paréntesis en la expresión lógica.
+    """
+    return expresion_str.replace("[", "(").replace("]", ")").replace("{", "(").replace("}", ")")
+
 @app.route('/simplificar', methods=['POST'])
 def simplificar_expresion():
     # Obtener la expresión lógica desde el cuerpo de la solicitud
     data = request.get_json()
     if not data or 'expresion' not in data:
         return jsonify({"error": "Debe proporcionar una expresión lógica"}), 400
-    
+
     expresion_str = data['expresion']
-    
+
+    # Normalizar corchetes y llaves a paréntesis
+    expresion_str = normalizar_parentesis(expresion_str)
+
     # Extraer las variables de la expresión
     nombres_variables = extraer_variables(expresion_str)
     variables = {nombre: symbols(nombre) for nombre in nombres_variables}
